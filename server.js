@@ -6,68 +6,55 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Daftar server Piped Publik (Sangat stabil & anti-blokir IP cloud)
-const PIPED_INSTANCES = [
-    'https://pipedapi.kavin.rocks',
-    'https://pipedapi.tokhmi.xyz',
-    'https://pipedapi.smnz.de'
-];
-
-async function getYoutubeData(videoId) {
-    for (const instance of PIPED_INSTANCES) {
-        try {
-            const res = await fetch(`${instance}/streams/${videoId}`);
-            if (!res.ok) continue;
-            
-            const data = await res.json();
-            if (data && data.audioStreams && data.audioStreams.length > 0) {
-                // Cari kualitas audio m4a/mp4 (paling kompatibel dan ringan untuk web player)
-                const bestAudio = data.audioStreams.find(s => s.mimeType.includes('mp4') || s.mimeType.includes('m4a')) || data.audioStreams[0];
-                return {
-                    url: bestAudio.url,
-                    duration: data.duration
-                };
-            }
-        } catch (e) {
-            console.error(`Error dari ${instance}:`, e.message);
-        }
-    }
-    throw new Error('Semua Piped API gagal merespons');
-}
-
-// ENDPOINT 1: Untuk Download (Menyimpan lagu ke aplikasi)
-app.get('/download', async (req, res) => {
-    const videoId = req.query.id;
-    if (!videoId) return res.status(400).json({ success: false, error: 'Video ID kosong' });
+// Fungsi otomatis mencari link baru jika yang lama mati (Anti Kadaluarsa)
+async function getFreshStreamUrl(videoId) {
+    const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    
+    try {
+        const res1 = await fetch(`https://api.agatz.xyz/api/ytmp3?url=${encodeURIComponent(ytUrl)}`);
+        const data1 = await res1.json();
+        if (data1?.data?.download) return data1.data.download;
+    } catch (e) {}
 
     try {
-        const ytData = await getYoutubeData(videoId);
+        const res2 = await fetch(`https://api.siputzx.my.id/api/d/ytmp3?url=${encodeURIComponent(ytUrl)}`);
+        const data2 = await res2.json();
+        if (data2?.data?.dl) return data2.data.dl;
+    } catch (e) {}
+
+    throw new Error('Semua API Publik Sedang Sibuk');
+}
+
+app.get('/download', async (req, res) => {
+    const videoId = req.query.id;
+    if (!videoId) return res.status(400).json({ success: false, error: 'Video ID tidak ditemukan!' });
+
+    try {
+        // Cek ketersediaan lagu terlebih dahulu
+        await getFreshStreamUrl(videoId);
         
+        // KUNCI: Jangan kasih link YouTube asli ke aplikasi, kasih link proxy backend kita sendiri!
         return res.json({
             success: true,
-            // KUNCI UTAMA: Kita simpan URL proxy internal kita ke HP, BUKAN url asli YouTube!
             link: `https://nf-music-server-production.up.railway.app/stream?id=${videoId}`,
-            duration: ytData.duration || 210
+            duration: 210
         });
     } catch (err) {
-        console.error("Gagal Download:", err.message);
         return res.status(500).json({ success: false, error: 'Gagal memproses audio dari server YouTube.' });
     }
 });
 
-// ENDPOINT 2: Proxy Dinamis (Mencegah lagu tidak bisa diputar karena kedaluwarsa)
+// Endpoint Proxy untuk memutar lagu kapan saja tanpa takut link mati
 app.get('/stream', async (req, res) => {
     const videoId = req.query.id;
     if (!videoId) return res.status(400).send('Video ID kosong');
 
     try {
-        // Setiap kali tombol "Play" ditekan di aplikasi, backend akan mencari link fresh instan
-        const ytData = await getYoutubeData(videoId);
-        
-        // Redirect browser HTTP 302 agar player langsung memutar stream audio yang baru
-        res.redirect(ytData.url);
+        // Ambil link stream terbaru dari YouTube secara real-time
+        const freshUrl = await getFreshStreamUrl(videoId);
+        // Alihkan (Redirect) pemutar musik langsung ke link baru tersebut
+        res.redirect(freshUrl);
     } catch (err) {
-        console.error("Gagal Stream:", err.message);
         res.status(500).send('Gagal memutar audio, server YouTube sibuk.');
     }
 });
