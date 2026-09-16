@@ -6,56 +6,73 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Fungsi otomatis mencari link baru jika yang lama mati (Anti Kadaluarsa)
-async function getFreshStreamUrl(videoId) {
-    const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
+// Menggunakan API Key asli Abang (Sangat Stabil & Bebas Blokir Cloudflare)
+const RAPID_API_KEY = '53c605791dmsh9979ea24d3a22a1p1ad067jsnc02231fe6506'; 
+
+async function getYoutubeAudio(videoId) {
+    // Jalur Utama: RapidAPI
+    try {
+        const url = `https://youtube-mp36.p.rapidapi.com/dl?id=${videoId}`;
+        const res = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'x-rapidapi-host': 'youtube-mp36.p.rapidapi.com',
+                'x-rapidapi-key': RAPID_API_KEY
+            }
+        });
+        const data = await res.json();
+        if (data.link || data.url) return data.link || data.url;
+    } catch (e) {
+        console.error("RapidAPI Error:", e.message);
+    }
+
+    // Jalur Cadangan: Cobalt API Publik (Jika kuota RapidAPI habis)
+    try {
+        const resCobalt = await fetch('https://cobalt.kwiatekmiki.com/api/json', {
+            method: 'POST',
+            headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: `https://www.youtube.com/watch?v=${videoId}`, isAudioOnly: true })
+        });
+        const dataCobalt = await resCobalt.json();
+        if (dataCobalt.url) return dataCobalt.url;
+    } catch(e) {
+        console.error("Cobalt API Error:", e.message);
+    }
     
-    try {
-        const res1 = await fetch(`https://api.agatz.xyz/api/ytmp3?url=${encodeURIComponent(ytUrl)}`);
-        const data1 = await res1.json();
-        if (data1?.data?.download) return data1.data.download;
-    } catch (e) {}
-
-    try {
-        const res2 = await fetch(`https://api.siputzx.my.id/api/d/ytmp3?url=${encodeURIComponent(ytUrl)}`);
-        const data2 = await res2.json();
-        if (data2?.data?.dl) return data2.data.dl;
-    } catch (e) {}
-
-    throw new Error('Semua API Publik Sedang Sibuk');
+    throw new Error("Semua API gagal mengekstrak link audio.");
 }
 
+// ENDPOINT 1: Untuk Download
 app.get('/download', async (req, res) => {
     const videoId = req.query.id;
-    if (!videoId) return res.status(400).json({ success: false, error: 'Video ID tidak ditemukan!' });
+    if (!videoId) return res.status(400).json({ success: false, error: 'Video ID kosong!' });
 
     try {
-        // Cek ketersediaan lagu terlebih dahulu
-        await getFreshStreamUrl(videoId);
+        // Cek apakah lagu tersedia
+        await getYoutubeAudio(videoId);
         
-        // KUNCI: Jangan kasih link YouTube asli ke aplikasi, kasih link proxy backend kita sendiri!
+        // KUNCI ANTI-KADALUARSA: Aplikasi menyimpan link proxy backend, BUKAN link asli YouTube
         return res.json({
             success: true,
             link: `https://nf-music-server-production.up.railway.app/stream?id=${videoId}`,
-            duration: 210
+            duration: 220
         });
     } catch (err) {
-        return res.status(500).json({ success: false, error: 'Gagal memproses audio dari server YouTube.' });
+        return res.status(500).json({ success: false, error: 'Gagal memproses audio.' });
     }
 });
 
-// Endpoint Proxy untuk memutar lagu kapan saja tanpa takut link mati
+// ENDPOINT 2: Stream Dinamis (Saat tombol Play dipencet)
 app.get('/stream', async (req, res) => {
     const videoId = req.query.id;
     if (!videoId) return res.status(400).send('Video ID kosong');
 
     try {
-        // Ambil link stream terbaru dari YouTube secara real-time
-        const freshUrl = await getFreshStreamUrl(videoId);
-        // Alihkan (Redirect) pemutar musik langsung ke link baru tersebut
-        res.redirect(freshUrl);
+        // Ambil token link YouTube terbaru dalam sepersekian detik dan langsung putar
+        const audioUrl = await getYoutubeAudio(videoId);
+        res.redirect(audioUrl);
     } catch (err) {
-        res.status(500).send('Gagal memutar audio, server YouTube sibuk.');
+        res.status(500).send('Server gagal memutar audio.');
     }
 });
 
