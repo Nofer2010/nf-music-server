@@ -1,44 +1,49 @@
 const express = require('express');
 const cors = require('cors');
-const fetch = require('node-fetch'); // atau gunakan built-in fetch di Node.js versi terbaru
+const ytdl = require('ytdl-core');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Endpoint backend yang akan dipanggil oleh aplikasi Android (Kodular) Abang
+// Endpoint backend NF Musik Player
 app.get('/download', async (req, res) => {
     const videoId = req.query.id;
     if (!videoId) {
-        return res.status(400).json({ error: 'Video ID tidak ditemukan!' });
+        return res.status(400).json({ success: false, error: 'Video ID tidak ditemukan!' });
     }
 
     try {
-        // API Key Abang disembunyikan di sini (aman dari pencurian pengguna aplikasi)
-        const rapidApiKey = '53c605791dmsh9979ea24d3a22a1p1ad067jsnc02231fe6506'; 
+        const videoURL = `https://www.youtube.com/watch?v=${videoId}`;
         
-        const apiResponse = await fetch(`https://youtube-mp36.p.rapidapi.com/dl?id=${videoId}`, {
-            method: 'GET',
-            headers: {
-                'x-rapidapi-host': 'youtube-mp36.p.rapidapi.com',
-                'x-rapidapi-key': rapidApiKey
-            }
+        // Memastikan validitas video sebelum ditarik audionya
+        if (!ytdl.validateID(videoId) && !ytdl.validateURL(videoURL)) {
+            return res.status(400).json({ success: false, error: 'URL atau ID YouTube tidak valid!' });
+        }
+
+        const info = await ytdl.getInfo(videoURL);
+        const audioFormats = ytdl.filterFormats(info.formats, 'audioonly');
+        
+        if (audioFormats.length === 0) {
+            return res.status(500).json({ success: false, error: 'Format audio tidak ditemukan.' });
+        }
+
+        // Ambil direct stream link kualitas terbaik yang aktif
+        const bestAudio = audioFormats[0];
+        const durationSec = parseInt(info.videoDetails.lengthSeconds) || 200;
+
+        return res.json({
+            success: true,
+            link: bestAudio.url,
+            duration: durationSec
         });
 
-        const data = await apiResponse.json();
-        
-        if (data.link || data.url) {
-            return res.json({
-                success: true,
-                link: data.link || data.url,
-                duration: data.duration || 225
-            });
-        } else {
-            return res.status(500).json({ success: false, error: 'Gagal mengambil tautan audio dari server YouTube.' });
-        }
     } catch (err) {
-        console.error(err);
-        return res.status(500).json({ success: false, error: 'Terjadi kesalahan pada server.' });
+        console.error("Error backend download:", err.message);
+        return res.status(500).json({ 
+            success: false, 
+            error: 'Gagal memproses audio dari server YouTube. Silakan coba lagu lain.' 
+        });
     }
 });
 
