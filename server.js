@@ -1,66 +1,78 @@
 const express = require('express');
 const cors = require('cors');
-// Pastikan node-fetch sudah ada di package.json (sebelumnya sudah ada)
-const fetch = require('node-fetch'); 
+const fetch = require('node-fetch');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Daftar server Piped Publik (Sangat stabil & anti-blokir IP cloud)
+const PIPED_INSTANCES = [
+    'https://pipedapi.kavin.rocks',
+    'https://pipedapi.tokhmi.xyz',
+    'https://pipedapi.smnz.de'
+];
+
+async function getYoutubeData(videoId) {
+    for (const instance of PIPED_INSTANCES) {
+        try {
+            const res = await fetch(`${instance}/streams/${videoId}`);
+            if (!res.ok) continue;
+            
+            const data = await res.json();
+            if (data && data.audioStreams && data.audioStreams.length > 0) {
+                // Cari kualitas audio m4a/mp4 (paling kompatibel dan ringan untuk web player)
+                const bestAudio = data.audioStreams.find(s => s.mimeType.includes('mp4') || s.mimeType.includes('m4a')) || data.audioStreams[0];
+                return {
+                    url: bestAudio.url,
+                    duration: data.duration
+                };
+            }
+        } catch (e) {
+            console.error(`Error dari ${instance}:`, e.message);
+        }
+    }
+    throw new Error('Semua Piped API gagal merespons');
+}
+
+// ENDPOINT 1: Untuk Download (Menyimpan lagu ke aplikasi)
 app.get('/download', async (req, res) => {
     const videoId = req.query.id;
-    if (!videoId) {
-        return res.status(400).json({ success: false, error: 'Video ID tidak ditemukan!' });
-    }
+    if (!videoId) return res.status(400).json({ success: false, error: 'Video ID kosong' });
 
-    const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    
     try {
-        // JALUR 1: Menggunakan API Publik Ryzendesu (Sangat stabil & bebas limit)
-        const response = await fetch(`https://api.ryzendesu.vip/api/downloader/ytmp3?url=${encodeURIComponent(ytUrl)}`);
-        const data = await response.json();
-
-        // Mencari link audio di dalam respons JSON
-        let downloadUrl = data?.url || data?.data?.url || (data?.data && data.data[0]?.url);
-
-        if (downloadUrl) {
-            return res.json({
-                success: true,
-                link: downloadUrl,
-                duration: 225 // Estimasi durasi default
-            });
-        }
-        throw new Error("Link audio gagal didapatkan dari API Utama.");
+        const ytData = await getYoutubeData(videoId);
         
+        return res.json({
+            success: true,
+            // KUNCI UTAMA: Kita simpan URL proxy internal kita ke HP, BUKAN url asli YouTube!
+            link: `https://nf-music-server-production.up.railway.app/stream?id=${videoId}`,
+            duration: ytData.duration || 210
+        });
     } catch (err) {
-        console.error("API Utama Error:", err.message);
+        console.error("Gagal Download:", err.message);
+        return res.status(500).json({ success: false, error: 'Gagal memproses audio dari server YouTube.' });
+    }
+});
+
+// ENDPOINT 2: Proxy Dinamis (Mencegah lagu tidak bisa diputar karena kedaluwarsa)
+app.get('/stream', async (req, res) => {
+    const videoId = req.query.id;
+    if (!videoId) return res.status(400).send('Video ID kosong');
+
+    try {
+        // Setiap kali tombol "Play" ditekan di aplikasi, backend akan mencari link fresh instan
+        const ytData = await getYoutubeData(videoId);
         
-        // JALUR 2 (CADANGAN): Menggunakan API Publik Siputzx jika API pertama down
-        try {
-            const fallbackRes = await fetch(`https://api.siputzx.my.id/api/d/ytmp3?url=${encodeURIComponent(ytUrl)}`);
-            const fallbackData = await fallbackRes.json();
-            
-            let fallbackUrl = fallbackData?.data?.dl;
-            
-            if (fallbackUrl) {
-                return res.json({
-                    success: true,
-                    link: fallbackUrl,
-                    duration: 225
-                });
-            }
-            throw new Error("Semua jalur API Publik gagal mengekstrak audio.");
-        } catch (fallbackErr) {
-            console.error("API Fallback Error:", fallbackErr.message);
-            return res.status(500).json({ 
-                success: false, 
-                error: 'Gagal memproses audio dari server YouTube. Coba link lain.' 
-            });
-        }
+        // Redirect browser HTTP 302 agar player langsung memutar stream audio yang baru
+        res.redirect(ytData.url);
+    } catch (err) {
+        console.error("Gagal Stream:", err.message);
+        res.status(500).send('Gagal memutar audio, server YouTube sibuk.');
     }
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Server Backend NF Musik berjalan di port ${PORT}`);
+    console.log(`Server Backend berjalan di port ${PORT}`);
 });
